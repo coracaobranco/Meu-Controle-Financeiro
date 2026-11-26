@@ -60,17 +60,29 @@ restore(o){return new Promise((res,rej)=>{const t=this.db.transaction(ST,'readwr
 
 const Scanner={
 pick(cap,accept='image/*'){return new Promise(r=>{const i=document.createElement('input');i.type='file';i.accept=accept;if(cap)i.capture='environment';i.onchange=()=>r(i.files[0]);i.click()})},
-shrink(f){return new Promise((res,rej)=>{const u=URL.createObjectURL(f),i=new Image();i.onload=()=>{const k=Math.min(1,1600/Math.max(i.width,i.height)),c=document.createElement('canvas');c.width=i.width*k;c.height=i.height*k;c.getContext('2d').drawImage(i,0,0,c.width,c.height);URL.revokeObjectURL(u);res(c.toDataURL('image/jpeg',.75))};i.onerror=()=>rej(new Error('Imagem inválida'));i.src=u})},
+shrink(f){return new Promise((res,rej)=>{const u=URL.createObjectURL(f),i=new Image();i.onload=()=>{const k=Math.min(1,1600/Math.max(i.width,i.height)),c=document.createElement('canvas');c.width=i.width*k;c.height=i.height*k;const x=c.getContext('2d');x.filter='grayscale(1) contrast(1.35)';x.drawImage(i,0,0,c.width,c.height);URL.revokeObjectURL(u);res(c.toDataURL('image/jpeg',.75))};i.onerror=()=>rej(new Error('Imagem inválida'));i.src=u})},
 async ocr(url,cb){if(!window.Tesseract)throw new Error('biblioteca de OCR indisponível (conecte-se à internet na primeira vez)');const r=await Tesseract.recognize(url,'por',{logger:m=>m.progress!=null&&cb&&cb(m.progress)});return r.data.text},
 money(s){return(s.match(/\d{1,3}(?:\.\d{3})*,\d{2}|\d+,\d{2}/g)||[]).map(x=>parseFloat(x.replace(/\./g,'').replace(',','.')))},
 date(s){const m=(s||'').match(/(\d{2})[\/.-](\d{2})[\/.-](\d{4})/);return m?`${m[3]}-${m[2]}-${m[1]}`:''},
+STOP:new Set(['KG','UN','UND','UNID','LT','PC','CX','ML','VL','UNIT','QTD','QTDE','ITEM','COD','CODIGO','DESCRICAO','EAN','RS']),
+clean(s){const w=s.replace(/[^A-Za-zÀ-ÿ]+/g,' ').split(' ').filter(t=>t.length>1&&!this.STOP.has(t.toUpperCase().normalize('NFD').replace(/[\u0300-\u036f]/g,'')));
+return w.map((t,i)=>{t=t.toLowerCase();return i&&['de','da','do','dos','das','e','com'].includes(t)?t:t[0].toUpperCase()+t.slice(1)}).join(' ')},
 parseNote(t){const L=t.split('\n').map(x=>x.trim()).filter(Boolean);
+const SKIP=/total|troco|dinheiro|cart[aã]o|cnpj|cpf|desconto|pagamento|tribut|valor a pagar|consumidor|icms|nfc|danfe|chave|protocolo|acr[eé]scimo|aprox|\blei\b|cupom|fiscal|s[eé]rie|emiss|autoriza|\bvia\b|\bpix\b|cr[eé]dito|d[eé]bito|qtd\.? *total/i;
 const store=L.find(l=>/[A-Za-zÀ-ú]{4,}/.test(l))||'',cnpj=(t.match(/\d{2}\.?\d{3}\.?\d{3}\/?\d{4}-?\d{2}/)||[''])[0],time=(t.match(/\b([01]\d|2[0-3]):[0-5]\d/)||[''])[0];
-let total=0;const items=[];
-L.forEach(l=>{const v=this.money(l);if(/total/i.test(l)&&!/sub/i.test(l)&&v.length)total=Math.max(total,v[v.length-1]);
-if(v.length<2||/total|troco|dinheiro|cart|cnpj|cpf|desconto|pagamento|tribut/i.test(l))return;
-let name=l.split(/\s\d/)[0].replace(/^\d+\s*/,'').replace(/\b(KG|UN|LT|L|PC|CX|G|ML)\b\s*$/i,'').trim();if(name.length<3)return;
-const tt=v[v.length-1],vu=v[v.length-2];items.push({name,qty:vu?Math.round(tt/vu*1000)/1000:1,unit:((l.match(/\b(KG|UN|LT|L|PC|CX|G|ML)\b/i)||[])[1]||'UN').toUpperCase().replace('LT','L'),vu,total:tt})});
+let total=0,pend='';const items=[],U=/(KG|UN|UND|LT|L|PC|CX|G|ML)/.source;
+L.forEach(l=>{const v=this.money(l);
+if(/total/i.test(l)&&!/sub/i.test(l)&&v.length)total=Math.max(total,v[v.length-1]);
+if(SKIP.test(l)){pend='';return}
+const name=this.clean(l);
+if(!v.length){pend=name.length>=3?name:'';return}
+const n=name.length>=3?name:pend;pend='';if(n.length<3)return;
+const tt=v[v.length-1],vu=v.length>1?v[v.length-2]:tt;
+const z=l.replace(/\d+[.,]?\d*(?:KG|G|L|ML)\b/gi,' ');let a,u,m;let qty=vu?Math.round(tt/vu*1000)/1000:1,unit='UN';
+if(m=z.match(new RegExp('(\\d+(?:[.,]\\d{1,3})?)\\s*'+U+'\\b','i'))){a=m[1];u=m[2]}else if(m=z.match(new RegExp('\\b'+U+'\\s*(\\d+(?:[.,]\\d{1,3})?)','i'))){u=m[1];a=m[2]}
+if(a){const q=parseFloat(a.replace(',','.'));unit=u.toUpperCase();if(q>0&&Math.abs(q*vu-tt)<=tt*.05+.05)qty=q}
+unit=unit.replace('UND','UN').replace('LT','L');
+items.push({name:n,qty,unit,vu,total:tt})});
 if(!total)total=+items.reduce((s,i)=>s+i.total,0).toFixed(2);
 const pay=/pix/i.test(t)?'Pix':/cr[eé]dito/i.test(t)?'Crédito':/d[eé]bito/i.test(t)?'Débito':/dinheiro/i.test(t)?'Dinheiro':'Outro';
 return{store,cnpj,date:this.date(t),time,total,pay,items}},
